@@ -59,13 +59,13 @@ def run_code_agent(settings: Settings, agent_repo: str, issue_number: int) -> Co
     target_repo = _parse_target_repo(issue.body or "")
     if not target_repo:
         target_repo = agent_repo
-        gh.post_comment(agent_repo, issue_number, "??????? ??????????? ?? ??????, ????????? ??????????? Issue.")
+        gh.post_comment(agent_repo, issue_number, "Целевой репозиторий не указан, использую репозиторий Issue.")
 
     branch = f"sdlc/issue-{issue_number}"
     pr = gh.find_open_pr_by_branch(target_repo, branch)
     state = _load_or_init_state(gh, pr, target_repo, issue.html_url, settings.max_iterations)
     if not can_iterate(state):
-        gh.post_comment(agent_repo, issue_number, "????? ???????? ????????.")
+        gh.post_comment(agent_repo, issue_number, "Лимит итераций исчерпан.")
         return CodeResult(pr_number=pr.number if pr else None, branch=branch, iteration=state.iteration, summary="max-iterations")
 
     state = next_iteration(state, verdict="in_progress")
@@ -112,8 +112,12 @@ def run_code_agent(settings: Settings, agent_repo: str, issue_number: int) -> Co
         existing_pp = os.environ.get("PYTHONPATH")
         if existing_pp:
             pythonpath_parts.append(existing_pp)
-        test_env = {"PYTHONPATH": os.pathsep.join(pythonpath_parts)}
-        test_result = run_cmd(settings.default_test_cmd, cwd=repo_path, timeout_sec=settings.test_timeout_sec, extra_env=test_env)
+        pythonpath_value = os.pathsep.join(pythonpath_parts)
+        test_env = {"PYTHONPATH": pythonpath_value}
+        test_cmd = settings.default_test_cmd
+        if os.name != "nt":
+            test_cmd = f"PYTHONPATH={pythonpath_value} {settings.default_test_cmd}"
+        test_result = run_cmd(test_cmd, cwd=repo_path, timeout_sec=settings.test_timeout_sec, extra_env=test_env)
 
         if test_result.returncode != 0:
             fix_context = _build_fix_context(repo_path, issue.body or "", test_result.stdout + "\n" + test_result.stderr)
@@ -134,7 +138,7 @@ def run_code_agent(settings: Settings, agent_repo: str, issue_number: int) -> Co
             fix_summary = str(fix_data.get("summary", ""))
             _apply_file_changes(repo_path, fix_data)
             quality_results = run_quality_checks(repo_path, timeout_sec=settings.test_timeout_sec)
-            test_result = run_cmd(settings.default_test_cmd, cwd=repo_path, timeout_sec=settings.test_timeout_sec, extra_env=test_env)
+            test_result = run_cmd(test_cmd, cwd=repo_path, timeout_sec=settings.test_timeout_sec, extra_env=test_env)
             if fix_summary:
                 summary = fix_summary
 
