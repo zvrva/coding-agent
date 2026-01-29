@@ -1,0 +1,8 @@
+version: "3.9"
+
+services:
+  agent:
+    build: .
+    env_file:
+      - .env
+    command: ["code", "--issue", "1", "--agent-repo", "owner/repo"]

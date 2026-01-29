@@ -1,0 +1,41 @@
+name: Review PR
+
+on:
+  repository_dispatch:
+    types: [review_pr]
+  workflow_dispatch:
+    inputs:
+      target_repo:
+        description: "Target repo full name (owner/name)"
+        required: true
+      pr_number:
+        description: "PR number in target repo"
+        required: true
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout agent repo
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install agent
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install .
+
+      - name: Run review agent
+        env:
+          GITHUB_TOKEN: ${{ secrets.AGENT_GITHUB_TOKEN }}
+          CODESTRAL_API_KEY: ${{ secrets.CODESTRAL_API_KEY }}
+          CODESTRAL_API_BASE: ${{ secrets.CODESTRAL_API_BASE }}
+          CODESTRAL_MODEL: ${{ secrets.CODESTRAL_MODEL }}
+        run: |
+          TARGET_REPO="${{ github.event.client_payload.repo || github.event.inputs.target_repo }}"
+          PR_NUMBER="${{ github.event.client_payload.pr || github.event.inputs.pr_number }}"
+          sdlc-agent review --repo "$TARGET_REPO" --pr "$PR_NUMBER"

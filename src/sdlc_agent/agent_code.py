@@ -1,0 +1,325 @@
+﻿from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+import re
+import tempfile
+from typing import Iterable
+
+from .config import Settings
+from .github import GitHubClient
+from .llm import chat, extract_json
+from .runner import detect_install_cmd, run_cmd, run_quality_checks
+from .state import State, can_iterate, new_state, next_iteration, parse_state, render_state
+
+
+PROMPT_CODE_PATCH = """Ты — код-агент. Внеси изменения, чтобы исправить задачу.
+Верни ТОЛЬКО JSON со схемой:
+{
+  "files": [
+    {"path": "relative/path.py", "content": "FULL FILE CONTENTS"}
+  ],
+  "summary": "короткое описание"
+}
+Правила:
+- Меняй только нужные файлы.
+- Для каждого изменённого файла дай полный контент.
+- Никакого markdown. Только JSON.
+"""
+
+
+@dataclass(frozen=True)
+class CodeResult:
+    pr_number: int | None
+    branch: str
+    iteration: int
+    summary: str
+
+
+def run_code_agent(settings: Settings, agent_repo: str, issue_number: int) -> CodeResult:
+    gh = GitHubClient(settings.github_token, settings.github_api_base)
+    issue = gh.get_issue(agent_repo, issue_number)
+
+    target_repo = _parse_target_repo(issue.body or "")
+    if not target_repo:
+        gh.post_comment(agent_repo, issue_number, "Не найден целевой репозиторий в Issue.")
+        raise ValueError("Target repo not found in issue body")
+
+    branch = f"sdlc/issue-{issue_number}"
+    pr = gh.find_open_pr_by_branch(target_repo, branch)
+    state = _load_or_init_state(gh, pr, target_repo, issue.html_url, settings.max_iterations)
+    if not can_iterate(state):
+        gh.post_comment(agent_repo, issue_number, "Лимит итераций исчерпан.")
+        return CodeResult(pr_number=pr.number if pr else None, branch=branch, iteration=state.iteration, summary="max-iterations")
+
+    state = next_iteration(state, verdict="in_progress")
+    iteration = state.iteration
+
+    with tempfile.TemporaryDirectory(prefix="sdlc-agent-") as tmp:
+        repo_path = _clone_repo(target_repo, settings.github_token, tmp)
+        _checkout_branch(repo_path, branch)
+
+        install_cmds = detect_install_cmd(repo_path)
+        if not install_cmds:
+            gh.post_comment(
+                agent_repo,
+                issue_number,
+                "Не найдены инструкции по установке зависимостей (pyproject/requirements*).",
+            )
+            return CodeResult(pr_number=pr.number if pr else None, branch=branch, iteration=iteration, summary="no-install")
+
+        _install_dependencies(repo_path, install_cmds, settings.pip_timeout_sec)
+
+        context = _build_context(repo_path, issue.body or "")
+        messages = [
+            {"role": "system", "content": PROMPT_CODE_PATCH},
+            {"role": "user", "content": context},
+        ]
+        llm_resp = chat(
+            settings.codestral_api_base,
+            settings.codestral_api_key,
+            settings.codestral_model,
+            messages,
+            temperature=0.2,
+            max_tokens=2048,
+            timeout_sec=60,
+        )
+        data = extract_json(llm_resp.content)
+        summary = str(data.get("summary", ""))
+        _apply_file_changes(repo_path, data)
+
+        quality_results = run_quality_checks(repo_path, timeout_sec=settings.test_timeout_sec)
+        test_result = run_cmd(settings.default_test_cmd, cwd=repo_path, timeout_sec=settings.test_timeout_sec)
+
+        _commit_all(repo_path, branch, iteration, summary)
+        _push(repo_path)
+
+        pr_body = _build_pr_body(issue, summary)
+        pr = gh.create_or_update_pr(
+            target_repo,
+            branch=branch,
+            title=f"[SDLC] Issue #{issue_number}: {issue.title}",
+            body=pr_body,
+        )
+
+        state = next_iteration(state, verdict="pending_review")
+        gh.upsert_state_comment(target_repo, pr.number, render_state(state))
+        gh.post_comment(target_repo, pr.number, _format_run_report(quality_results, test_result))
+
+        return CodeResult(pr_number=pr.number, branch=branch, iteration=iteration, summary=summary)
+
+
+def _parse_target_repo(text: str) -> str | None:
+    patterns = [
+        r"(?im)^\s*Target repo\s*:\s*([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)\s*$",
+        r"(?im)^\s*Целевой репозиторий\s*:\s*([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)\s*$",
+    ]
+    for pat in patterns:
+        match = re.search(pat, text or "")
+        if match:
+            return match.group(1)
+    return None
+
+
+def _clone_repo(target_repo: str, token: str, tmp_dir: str) -> Path:
+    repo_name = target_repo.split("/")[-1]
+    clone_url = f"https://github.com/{target_repo}.git"
+    run_cmd(f"git clone {clone_url}", cwd=Path(tmp_dir))
+    repo_path = Path(tmp_dir) / repo_name
+    auth_url = f"https://x-access-token:{token}@github.com/{target_repo}.git"
+    run_cmd(f"git remote set-url origin {auth_url}", cwd=repo_path)
+    return repo_path
+
+
+def _checkout_branch(repo_path: Path, branch: str) -> None:
+    res = run_cmd(f"git checkout {branch}", cwd=repo_path)
+    if res.returncode != 0:
+        run_cmd(f"git checkout -b {branch}", cwd=repo_path)
+
+
+def _install_dependencies(repo_path: Path, cmds: list[str], timeout_sec: int) -> None:
+    last = None
+    for cmd in cmds:
+        last = run_cmd(cmd, cwd=repo_path, timeout_sec=timeout_sec)
+        if last.returncode == 0:
+            return
+    raise RuntimeError(f"Dependency install failed: {last.stderr if last else 'unknown'}")
+
+
+def _build_context(repo_path: Path, issue_text: str) -> str:
+    issue_text = (issue_text or "").strip()
+    files = _select_context_files(repo_path, issue_text)
+    parts = [
+        "ISSUE:",
+        issue_text,
+        "",
+        "REPO_SUMMARY:",
+        _summarize_repo(repo_path),
+        "",
+        "FILES:",
+    ]
+    for path in files:
+        rel = path.relative_to(repo_path)
+        content = _read_file_limited(path, limit=4000)
+        parts.append(f"\n# {rel}\n{content}\n")
+    return "\n".join(parts)
+
+
+def _select_context_files(repo_path: Path, issue_text: str) -> list[Path]:
+    candidates = _collect_candidates(repo_path)
+    ranked = sorted(
+        candidates,
+        key=lambda p: _score_file(p, repo_path, issue_text),
+        reverse=True,
+    )
+    return ranked[:12]
+
+
+def _collect_candidates(repo_path: Path) -> list[Path]:
+    candidates: list[Path] = []
+    for p in repo_path.rglob("*"):
+        if not p.is_file():
+            continue
+        if _skip_path(p):
+            continue
+        if p.suffix in {".py", ".md", ".txt"}:
+            candidates.append(p)
+    return candidates
+
+
+def _skip_path(path: Path) -> bool:
+    parts = set(path.parts)
+    if ".venv" in parts or "__pycache__" in parts or ".git" in parts:
+        return True
+    if "node_modules" in parts or ".tox" in parts or ".mypy_cache" in parts:
+        return True
+    return False
+
+
+def _score_file(path: Path, repo_path: Path, issue_text: str) -> int:
+    rel = path.relative_to(repo_path).as_posix()
+    score = 0
+
+    if rel.startswith("tests/"):
+        score += 5
+    if rel.startswith("src/") or "/src/" in rel:
+        score += 3
+
+    tokens = _issue_tokens(issue_text)
+    for token in tokens:
+        if token in rel.lower():
+            score += 3
+
+    if path.suffix == ".py":
+        score += 2
+    if path.name.lower() == "readme.md":
+        score += 1
+
+    return score
+
+
+def _issue_tokens(text: str) -> set[str]:
+    tokens = set()
+    for raw in re.split(r"[^A-Za-z0-9_.-]+", text.lower()):
+        if len(raw) >= 3:
+            tokens.add(raw)
+    return tokens
+
+
+def _read_file_limited(path: Path, limit: int) -> str:
+    try:
+        content = path.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return ""
+    if len(content) <= limit:
+        return content
+    return content[:limit] + "\n... [truncated]\n"
+
+
+def _summarize_repo(repo_path: Path) -> str:
+    top = []
+    for p in repo_path.iterdir():
+        if p.name.startswith("."):
+            continue
+        top.append(p.name + ("/" if p.is_dir() else ""))
+    top = sorted(top)
+    return "Top-level: " + ", ".join(top)
+
+
+def _apply_file_changes(repo_path: Path, data: dict) -> None:
+    files = data.get("files") or []
+    for item in files:
+        rel = str(item.get("path", "")).strip()
+        content = item.get("content")
+        if not rel or content is None:
+            continue
+        full_path = (repo_path / rel).resolve()
+        if not str(full_path).startswith(str(repo_path.resolve())):
+            continue
+        full_path.parent.mkdir(parents=True, exist_ok=True)
+        full_path.write_text(content, encoding="utf-8")
+
+
+def _commit_all(repo_path: Path, branch: str, iteration: int, summary: str) -> None:
+    run_cmd("git add .", cwd=repo_path)
+    msg = f"SDLC(iter={iteration}): {summary or 'apply changes'}"
+    run_cmd(f"git commit -m \"{msg}\"", cwd=repo_path)
+
+
+def _push(repo_path: Path) -> None:
+    run_cmd("git push -u origin HEAD", cwd=repo_path)
+
+
+def _build_pr_body(issue, summary: str) -> str:
+    body = [
+        "## SDLC Agent PR",
+        f"- Source issue: {issue.html_url}",
+        f"- Summary: {summary or 'n/a'}",
+        "",
+        "### Issue context",
+        issue.body or "",
+    ]
+    return "\n".join(body)
+
+
+def _load_or_init_state(
+    gh: GitHubClient,
+    pr,
+    target_repo: str,
+    issue_url: str,
+    max_iterations: int,
+) -> State:
+    if pr:
+        comment = gh.find_state_comment(target_repo, pr.number)
+        if comment:
+            parsed = parse_state(comment.body)
+            if parsed:
+                return parsed
+    return new_state(target_repo=target_repo, source_issue_url=issue_url, max_iterations=max_iterations)
+
+
+def _format_run_report(quality_results, test_result) -> str:
+    lines = ["## SDLC Agent run report"]
+    if quality_results:
+        lines.append("### Quality checks")
+        for res in quality_results:
+            lines.append(_format_command(res))
+    else:
+        lines.append("### Quality checks")
+        lines.append("No quality tools detected (ruff/black/mypy).")
+
+    lines.append("### Tests")
+    lines.append(_format_command(test_result))
+    return "\n".join(lines)
+
+
+def _format_command(res) -> str:
+    status = "OK" if res.returncode == 0 else f"FAIL ({res.returncode})"
+    return "\n".join(
+        [
+            f"- `{res.cmd}` -> {status} in {res.duration_sec:.1f}s",
+            "```",
+            (res.stdout or res.stderr or "").strip()[:4000],
+            "```",
+        ]
+    )

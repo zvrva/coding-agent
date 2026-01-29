@@ -1,0 +1,38 @@
+name: Issue to PR
+
+on:
+  issues:
+    types: [opened]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: "Issue number in agent repo"
+        required: true
+
+jobs:
+  code:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout agent repo
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install agent
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install .
+
+      - name: Run code agent
+        env:
+          GITHUB_TOKEN: ${{ secrets.AGENT_GITHUB_TOKEN }}
+          CODESTRAL_API_KEY: ${{ secrets.CODESTRAL_API_KEY }}
+          CODESTRAL_API_BASE: ${{ secrets.CODESTRAL_API_BASE }}
+          CODESTRAL_MODEL: ${{ secrets.CODESTRAL_MODEL }}
+          MAX_ITERATIONS: "5"
+        run: |
+          ISSUE_NUMBER="${{ github.event.issue.number || github.event.inputs.issue_number }}"
+          sdlc-agent code --issue "$ISSUE_NUMBER" --agent-repo "${{ github.repository }}"

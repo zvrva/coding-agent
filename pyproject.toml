@@ -1,0 +1,19 @@
+[project]
+name = "sdlc-agent"
+version = "0.1.0"
+description = "Lightweight SDLC coding agent"
+requires-python = ">=3.11"
+dependencies = [
+  "PyGithub>=2.3.0",
+  "requests>=2.31.0",
+]
+
+[project.scripts]
+sdlc-agent = "sdlc_agent.cli:main"
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
