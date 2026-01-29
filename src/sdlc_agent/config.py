@@ -28,14 +28,14 @@ def load_settings() -> Settings:
 
     return Settings(
         github_token=github_token,
-        github_api_base=os.getenv("GITHUB_API_BASE", "https://api.github.com"),
+        github_api_base=_get_optional("GITHUB_API_BASE", "https://api.github.com"),
         codestral_api_key=codestral_api_key,
-        codestral_api_base=os.getenv("CODESTRAL_API_BASE", "https://api.mistral.ai/v1"),
-        codestral_model=os.getenv("CODESTRAL_MODEL", "codestral-latest"),
+        codestral_api_base=_get_optional("CODESTRAL_API_BASE", "https://api.mistral.ai/v1"),
+        codestral_model=_get_optional("CODESTRAL_MODEL", "codestral-latest"),
         max_iterations=_get_int("MAX_ITERATIONS", 5),
         test_timeout_sec=_get_int("TEST_TIMEOUT_SEC", 900),
         pip_timeout_sec=_get_int("PIP_TIMEOUT_SEC", 600),
-        default_test_cmd=os.getenv("DEFAULT_TEST_CMD", "python -m pytest -q"),
+        default_test_cmd=_get_optional("DEFAULT_TEST_CMD", "python -m pytest -q"),
     )
 
 
@@ -83,3 +83,10 @@ def _get_int(name: str, default: int) -> int:
         return int(raw)
     except ValueError:
         raise ValueError(f"Invalid int for {name}: {raw}") from None
+
+
+def _get_optional(name: str, default: str) -> str:
+    value = os.getenv(name)
+    if not value:
+        return default
+    return value
