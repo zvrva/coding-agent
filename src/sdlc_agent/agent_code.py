@@ -29,6 +29,21 @@ PROMPT_CODE_PATCH = """Ты — код-агент. Внеси изменения
 """
 
 
+PROMPT_CODE_FIX = """Ты — код-агент. Исправь ошибки в коде по логам тестов.
+Верни ТОЛЬКО JSON со схемой:
+{
+  "files": [
+    {"path": "relative/path.py", "content": "FULL FILE CONTENTS"}
+  ],
+  "summary": "что исправлено"
+}
+Правила:
+- Исправь ошибки, указанные в логах.
+- Для каждого изменённого файла дай полный контент.
+- Никакого markdown. Только JSON.
+"""
+
+
 @dataclass(frozen=True)
 class CodeResult:
     pr_number: int | None
@@ -100,6 +115,29 @@ def run_code_agent(settings: Settings, agent_repo: str, issue_number: int) -> Co
         test_env = {"PYTHONPATH": os.pathsep.join(pythonpath_parts)}
         test_result = run_cmd(settings.default_test_cmd, cwd=repo_path, timeout_sec=settings.test_timeout_sec, extra_env=test_env)
 
+        if test_result.returncode != 0:
+            fix_context = _build_fix_context(repo_path, issue.body or "", test_result.stdout + "\n" + test_result.stderr)
+            fix_messages = [
+                {"role": "system", "content": PROMPT_CODE_FIX},
+                {"role": "user", "content": fix_context},
+            ]
+            fix_resp = chat(
+                settings.codestral_api_base,
+                settings.codestral_api_key,
+                settings.codestral_model,
+                fix_messages,
+                temperature=0.2,
+                max_tokens=2048,
+                timeout_sec=60,
+            )
+            fix_data = extract_json(fix_resp.content)
+            fix_summary = str(fix_data.get("summary", ""))
+            _apply_file_changes(repo_path, fix_data)
+            quality_results = run_quality_checks(repo_path, timeout_sec=settings.test_timeout_sec)
+            test_result = run_cmd(settings.default_test_cmd, cwd=repo_path, timeout_sec=settings.test_timeout_sec, extra_env=test_env)
+            if fix_summary:
+                summary = fix_summary
+
         _commit_all(repo_path, branch, iteration, summary)
         _push(repo_path)
 
@@ -153,6 +191,26 @@ def _install_dependencies(repo_path: Path, cmds: list[str], timeout_sec: int) ->
         if last.returncode == 0:
             return
     raise RuntimeError(f"Dependency install failed: {last.stderr if last else 'unknown'}")
+
+
+def _build_fix_context(repo_path: Path, issue_text: str, error_text: str) -> str:
+    issue_text = (issue_text or "").strip()
+    error_text = (error_text or "").strip()
+    files = _select_context_files(repo_path, issue_text)
+    parts = [
+        "ISSUE:",
+        issue_text,
+        "",
+        "ERRORS:",
+        error_text[:8000],
+        "",
+        "FILES:",
+    ]
+    for path in files:
+        rel = path.relative_to(repo_path)
+        content = _read_file_limited(path, limit=4000)
+        parts.append(f"\n# {rel}\n{content}\n")
+    return "\n".join(parts)
 
 
 def _build_context(repo_path: Path, issue_text: str) -> str:
@@ -255,8 +313,9 @@ def _summarize_repo(repo_path: Path) -> str:
     return "Top-level: " + ", ".join(top)
 
 
-def _apply_file_changes(repo_path: Path, data: dict) -> None:
+def _apply_file_changes(repo_path: Path, data: dict) -> list[str]:
     files = data.get("files") or []
+    changed: list[str] = []
     for item in files:
         rel = str(item.get("path", "")).strip()
         content = item.get("content")
@@ -267,6 +326,9 @@ def _apply_file_changes(repo_path: Path, data: dict) -> None:
             continue
         full_path.parent.mkdir(parents=True, exist_ok=True)
         full_path.write_text(content, encoding="utf-8")
+        changed.append(rel)
+
+    return changed
 
 
 def _commit_all(repo_path: Path, branch: str, iteration: int, summary: str) -> None:
