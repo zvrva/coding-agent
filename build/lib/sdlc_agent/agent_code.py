@@ -89,8 +89,7 @@ def run_code_agent(settings: Settings, agent_repo: str, issue_number: int) -> Co
         _apply_file_changes(repo_path, data)
 
         quality_results = run_quality_checks(repo_path, timeout_sec=settings.test_timeout_sec)
-        test_env = {"PYTHONPATH": str(repo_path)}
-        test_result = run_cmd(settings.default_test_cmd, cwd=repo_path, timeout_sec=settings.test_timeout_sec, extra_env=test_env)
+        test_result = run_cmd(settings.default_test_cmd, cwd=repo_path, timeout_sec=settings.test_timeout_sec)
 
         _commit_all(repo_path, branch, iteration, summary)
         _push(repo_path)

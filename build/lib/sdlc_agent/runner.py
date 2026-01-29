@@ -22,16 +22,8 @@ class CommandResult:
     duration_sec: float
 
 
-def run_cmd(
-    cmd: str,
-    cwd: Path,
-    timeout_sec: int | None = None,
-    extra_env: dict[str, str] | None = None,
-) -> CommandResult:
+def run_cmd(cmd: str, cwd: Path, timeout_sec: int | None = None) -> CommandResult:
     start = time.time()
-    env = _clean_env(os.environ)
-    if extra_env:
-        env.update(extra_env)
     proc = subprocess.run(
         cmd,
         cwd=str(cwd),
@@ -39,9 +31,7 @@ def run_cmd(
         text=True,
         capture_output=True,
         timeout=timeout_sec,
-        env=env,
-        encoding="utf-8",
-        errors="replace",
+        env=_clean_env(os.environ),
     )
     duration = time.time() - start
     return CommandResult(
