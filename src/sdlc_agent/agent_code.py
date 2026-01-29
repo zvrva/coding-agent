@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from pathlib import Path
+import os
 import re
 import tempfile
 from typing import Iterable
@@ -89,7 +90,14 @@ def run_code_agent(settings: Settings, agent_repo: str, issue_number: int) -> Co
         _apply_file_changes(repo_path, data)
 
         quality_results = run_quality_checks(repo_path, timeout_sec=settings.test_timeout_sec)
-        test_env = {"PYTHONPATH": str(repo_path)}
+        pythonpath_parts = [str(repo_path)]
+        src_dir = repo_path / "src"
+        if src_dir.exists():
+            pythonpath_parts.append(str(src_dir))
+        existing_pp = os.environ.get("PYTHONPATH")
+        if existing_pp:
+            pythonpath_parts.append(existing_pp)
+        test_env = {"PYTHONPATH": os.pathsep.join(pythonpath_parts)}
         test_result = run_cmd(settings.default_test_cmd, cwd=repo_path, timeout_sec=settings.test_timeout_sec, extra_env=test_env)
 
         _commit_all(repo_path, branch, iteration, summary)
