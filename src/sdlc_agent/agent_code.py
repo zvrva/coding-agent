@@ -118,6 +118,11 @@ def run_code_agent(settings: Settings, agent_repo: str, issue_number: int) -> Co
         if os.name != "nt":
             test_cmd = f"PYTHONPATH={pythonpath_value} {settings.default_test_cmd}"
         test_result = run_cmd(test_cmd, cwd=repo_path, timeout_sec=settings.test_timeout_sec, extra_env=test_env)
+        output_text = (test_result.stdout or "") + "\n" + (test_result.stderr or "")
+        if test_result.returncode != 0 and "ModuleNotFoundError" in output_text and "python_utils_demo" in output_text:
+            fallback_cmd = _build_pytest_fallback_cmd(repo_path)
+            test_cmd = fallback_cmd
+            test_result = run_cmd(test_cmd, cwd=repo_path, timeout_sec=settings.test_timeout_sec, extra_env=test_env)
 
         if test_result.returncode != 0:
             fix_context = _build_fix_context(repo_path, issue.body or "", test_result.stdout + "\n" + test_result.stderr)
@@ -195,6 +200,19 @@ def _install_dependencies(repo_path: Path, cmds: list[str], timeout_sec: int) ->
         if last.returncode == 0:
             return
     raise RuntimeError(f"Dependency install failed: {last.stderr if last else 'unknown'}")
+
+
+def _build_pytest_fallback_cmd(repo_path: Path) -> str:
+    repo_str = str(repo_path)
+    src_str = str(repo_path / "src")
+    code = (
+        "import sys; "
+        f"sys.path.insert(0, r\"{repo_str}\"); "
+        f"sys.path.insert(0, r\"{src_str}\"); "
+        "import pytest; "
+        "raise SystemExit(pytest.main([\"-q\"]))"
+    )
+    return f"python -c \"{code}\""
 
 
 def _build_fix_context(repo_path: Path, issue_text: str, error_text: str) -> str:
