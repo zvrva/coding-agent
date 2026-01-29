@@ -21,7 +21,9 @@ class Settings:
 
 def load_settings() -> Settings:
     _load_dotenv()
-    github_token = _get_required("GITHUB_TOKEN")
+    github_token = os.getenv("GITHUB_TOKEN") or os.getenv("AGENT_GITHUB_TOKEN")
+    if not github_token:
+        github_token = _get_required("GITHUB_TOKEN")
     codestral_api_key = _get_required("CODESTRAL_API_KEY")
 
     return Settings(
