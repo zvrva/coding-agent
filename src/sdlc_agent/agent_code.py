@@ -58,14 +58,14 @@ def run_code_agent(settings: Settings, agent_repo: str, issue_number: int) -> Co
 
     target_repo = _parse_target_repo(issue.body or "")
     if not target_repo:
-        gh.post_comment(agent_repo, issue_number, "Не найден целевой репозиторий в Issue.")
-        raise ValueError("Target repo not found in issue body")
+        target_repo = agent_repo
+        gh.post_comment(agent_repo, issue_number, "??????? ??????????? ?? ??????, ????????? ??????????? Issue.")
 
     branch = f"sdlc/issue-{issue_number}"
     pr = gh.find_open_pr_by_branch(target_repo, branch)
     state = _load_or_init_state(gh, pr, target_repo, issue.html_url, settings.max_iterations)
     if not can_iterate(state):
-        gh.post_comment(agent_repo, issue_number, "Лимит итераций исчерпан.")
+        gh.post_comment(agent_repo, issue_number, "????? ???????? ????????.")
         return CodeResult(pr_number=pr.number if pr else None, branch=branch, iteration=state.iteration, summary="max-iterations")
 
     state = next_iteration(state, verdict="in_progress")

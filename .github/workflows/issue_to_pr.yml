@@ -3,6 +3,8 @@ name: Issue to PR
 on:
   issues:
     types: [opened]
+  repository_dispatch:
+    types: [issue_opened]
   workflow_dispatch:
     inputs:
       issue_number:
@@ -34,5 +36,6 @@ jobs:
           CODESTRAL_MODEL: ${{ secrets.CODESTRAL_MODEL }}
           MAX_ITERATIONS: "5"
         run: |
-          ISSUE_NUMBER="${{ github.event.issue.number || github.event.inputs.issue_number }}"
-          sdlc-agent code --issue "$ISSUE_NUMBER" --agent-repo "${{ github.repository }}"
+          ISSUE_NUMBER="${{ github.event.client_payload.issue_number || github.event.issue.number || github.event.inputs.issue_number }}"
+          AGENT_REPO="${{ github.event.client_payload.repo || github.repository }}"
+          sdlc-agent code --issue "$ISSUE_NUMBER" --agent-repo "$AGENT_REPO"
