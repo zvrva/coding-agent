@@ -206,13 +206,12 @@ def _build_pytest_fallback_cmd(repo_path: Path) -> str:
     repo_str = str(repo_path)
     src_str = str(repo_path / "src")
     code = (
-        "import sys; "
-        f"sys.path.insert(0, r\"{repo_str}\"); "
-        f"sys.path.insert(0, r\"{src_str}\"); "
+        f"import sys; sys.path.insert(0, \"{repo_str}\"); "
+        f"sys.path.insert(0, \"{src_str}\"); "
         "import pytest; "
         "raise SystemExit(pytest.main([\"-q\"]))"
     )
-    return f"python -c \"{code}\""
+    return f"python -c '{code}'"
 
 
 def _build_fix_context(repo_path: Path, issue_text: str, error_text: str) -> str:
