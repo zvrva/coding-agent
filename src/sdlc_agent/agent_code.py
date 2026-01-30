@@ -153,6 +153,13 @@ def run_code_agent(settings: Settings, agent_repo: str, issue_number: int) -> Co
             if fix_summary:
                 summary = fix_summary
 
+        if not _has_changes(repo_path):
+            message = "????????? ?? ??????? ????? ?????????? ??????. PR ?? ??????."
+            gh.post_comment(agent_repo, issue_number, message)
+            if pr:
+                gh.post_comment(target_repo, pr.number, message)
+            return CodeResult(pr_number=pr.number if pr else None, branch=branch, iteration=iteration, summary="no-changes")
+
         _commit_all(repo_path, branch, iteration, summary)
         _push(repo_path)
 
@@ -194,9 +201,13 @@ def _clone_repo(target_repo: str, token: str, tmp_dir: str) -> Path:
 
 
 def _checkout_branch(repo_path: Path, branch: str) -> None:
-    res = run_cmd(f"git checkout {branch}", cwd=repo_path)
+    run_cmd("git fetch origin", cwd=repo_path)
+    default_branch = _get_default_branch(repo_path)
+    res = run_cmd(f"git checkout -B {branch} origin/{default_branch}", cwd=repo_path)
     if res.returncode != 0:
-        run_cmd(f"git checkout -b {branch}", cwd=repo_path)
+        res = run_cmd(f"git checkout -B {branch} origin/main", cwd=repo_path)
+        if res.returncode != 0:
+            run_cmd(f"git checkout -B {branch} origin/master", cwd=repo_path)
 
 
 def _install_dependencies(repo_path: Path, cmds: list[str], timeout_sec: int) -> None:
@@ -261,12 +272,20 @@ def _build_context(repo_path: Path, issue_text: str) -> str:
 
 def _select_context_files(repo_path: Path, issue_text: str) -> list[Path]:
     candidates = _collect_candidates(repo_path)
+    mandatory = _collect_mandatory_files(repo_path)
     ranked = sorted(
         candidates,
         key=lambda p: _score_file(p, repo_path, issue_text),
         reverse=True,
     )
-    return ranked[:12]
+    selected: list[Path] = []
+    seen = set()
+    for path in mandatory + ranked:
+        if path in seen:
+            continue
+        seen.add(path)
+        selected.append(path)
+    return selected[:12] if len(selected) <= 12 else selected
 
 
 def _collect_candidates(repo_path: Path) -> list[Path]:
@@ -421,3 +440,32 @@ def _format_command(res) -> str:
             "```",
         ]
     )
+
+
+def _collect_mandatory_files(repo_path: Path) -> list[Path]:
+    paths: list[Path] = []
+    for base in (
+        repo_path / "python_utils_demo",
+        repo_path / "src" / "python_utils_demo",
+        repo_path / "tests",
+    ):
+        if not base.exists():
+            continue
+        for path in base.rglob("*.py"):
+            if path.is_file() and not _skip_path(path):
+                paths.append(path)
+    return paths
+
+
+def _get_default_branch(repo_path: Path) -> str:
+    res = run_cmd("git symbolic-ref refs/remotes/origin/HEAD", cwd=repo_path)
+    if res.returncode == 0:
+        ref = (res.stdout or "").strip()
+        if ref.startswith("refs/remotes/origin/"):
+            return ref.split("/")[-1]
+    return "main"
+
+
+def _has_changes(repo_path: Path) -> bool:
+    res = run_cmd("git status --porcelain", cwd=repo_path)
+    return bool((res.stdout or "").strip())
