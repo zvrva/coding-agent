@@ -3,6 +3,8 @@
 from dataclasses import dataclass
 from typing import Any
 
+from github.GithubException import GithubException
+
 from .config import Settings
 from .github import GitHubClient
 from .llm import chat, extract_json
@@ -69,7 +71,13 @@ def run_review_agent(settings: Settings, target_repo: str, pr_number: int) -> Re
         reviewer_login = gh.get_current_user_login()
         if pr.user and reviewer_login and pr.user.login == reviewer_login:
             event = "COMMENT"
-    gh.post_review(target_repo, pr_number, review_body, event)
+    try:
+        gh.post_review(target_repo, pr_number, review_body, event)
+    except GithubException as exc:
+        if event == "REQUEST_CHANGES" and "Review Can not request changes on your own pull request" in str(exc):
+            gh.post_review(target_repo, pr_number, review_body, "COMMENT")
+        else:
+            raise
 
     if state_comment:
         st = parse_state(state_comment.body)
