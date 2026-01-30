@@ -290,7 +290,7 @@ def _build_review_context(
 def _build_test_context(issue_text: str, diff: str, files: list[dict[str, Any]], repo_path: Path) -> str:
     parts = ["ISSUE:", issue_text.strip(), "", "DIFF:", diff[:8000], "", "FILES:"]
     for f in files:
-        parts.append(f"- {f.get("filename")}")
+        parts.append(f'- {f.get("filename")}')
     return "\n".join(parts)
 
 def _build_pytest_fallback_cmd(repo_path: Path) -> str:
