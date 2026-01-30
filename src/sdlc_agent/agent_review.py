@@ -64,12 +64,17 @@ def run_review_agent(settings: Settings, target_repo: str, pr_number: int) -> Re
     files = gh.get_pr_files(target_repo, pr_number)
 
     issue_text = ""
+    agent_issue_repo = None
+    agent_issue_number = None
+    st = None
     state_comment = gh.find_state_comment(target_repo, pr_number)
     if state_comment:
         st = parse_state(state_comment.body)
         if st and st.source_issue_url:
             issue = gh.get_issue_by_url(st.source_issue_url)
             issue_text = issue.body or ""
+            agent_issue_repo = issue.repository.full_name
+            agent_issue_number = issue.number
 
     quality_results = []
     test_run = TestRun(result=None, note="", generated_files=[])
@@ -160,6 +165,11 @@ def run_review_agent(settings: Settings, target_repo: str, pr_number: int) -> Re
                 created_at=st.created_at,
             )
             gh.upsert_state_comment(target_repo, pr_number, render_state(updated))
+
+    if result.verdict == "changes_requested" and st and st.iteration < st.max_iterations and agent_issue_number:
+        dispatch_repo = os.getenv("AGENT_REPO") or agent_issue_repo
+        if dispatch_repo:
+            gh.dispatch_event(dispatch_repo, "issue_opened", {"repo": st.target_repo, "issue_number": agent_issue_number})
 
     return result
 

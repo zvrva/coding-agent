@@ -42,6 +42,7 @@ jobs:
           CODESTRAL_API_KEY: ${{ secrets.CODESTRAL_API_KEY }}
           CODESTRAL_API_BASE: ${{ secrets.CODESTRAL_API_BASE }}
           CODESTRAL_MODEL: ${{ secrets.CODESTRAL_MODEL }}
+          AGENT_REPO: ${{ github.repository }}
         run: |
           TARGET_REPO="${{ github.event.client_payload.repo || github.event.inputs.target_repo }}"
           PR_NUMBER="${{ github.event.client_payload.pr || github.event.inputs.pr_number }}"

@@ -24,6 +24,32 @@ class GitHubClient:
     def get_repo(self, full_name: str):
         return self._gh.get_repo(full_name)
 
+    def dispatch_event(self, repo_full: str, event_type: str, payload: dict) -> None:
+        url = f"{self._api_base}/repos/{repo_full}/dispatches"
+        headers = {
+            "Authorization": f"Bearer {self._token}",
+            "Accept": "application/vnd.github+json",
+        }
+        data = {"event_type": event_type, "client_payload": payload}
+        resp = requests.post(url, headers=headers, json=data, timeout=30)
+        if resp.status_code >= 400:
+            raise RuntimeError(f"Dispatch failed: {resp.status_code} {resp.text}")
+
+    def set_attempt_label(self, repo_full: str, pr_number: int, iteration: int, max_iterations: int) -> None:
+        repo = self.get_repo(repo_full)
+        issue = repo.get_issue(pr_number)
+        labels = list(issue.get_labels())
+        pattern = r"^(attempt|???????) \d+/\d+$"
+        for lbl in labels:
+            if re.match(pattern, lbl.name, flags=re.IGNORECASE):
+                issue.remove_from_labels(lbl)
+        label_name = f"??????? {iteration}/{max_iterations}"
+        try:
+            repo.get_label(label_name)
+        except Exception:
+            repo.create_label(name=label_name, color="ededed")
+        issue.add_to_labels(label_name)
+
     def get_issue(self, repo_full: str, number: int):
         return self.get_repo(repo_full).get_issue(number)
 

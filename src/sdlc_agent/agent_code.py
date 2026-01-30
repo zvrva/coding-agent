@@ -130,6 +130,7 @@ def run_code_agent(settings: Settings, agent_repo: str, issue_number: int) -> Co
 
         state = next_iteration(state, verdict="pending_review")
         gh.upsert_state_comment(target_repo, pr.number, render_state(state))
+        gh.set_attempt_label(target_repo, pr.number, iteration, state.max_iterations)
         gh.post_comment(target_repo, pr.number, _format_run_report_skipped())
 
         return CodeResult(pr_number=pr.number, branch=branch, iteration=iteration, summary=summary)
