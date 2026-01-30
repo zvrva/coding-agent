@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from dataclasses import dataclass
 import json
@@ -73,12 +73,12 @@ def extract_json(text: str) -> dict[str, Any]:
     if balanced:
         candidates.append(balanced)
 
-    for candidate in candidates:
-        for attempt in (candidate, _repair_json(candidate)):
-            try:
-                return json.loads(attempt)
-            except json.JSONDecodeError:
-                continue
+    decoder = json.JSONDecoder()
+    for cand in candidates:
+        for attempt in (cand, _repair_json(cand)):
+            parsed = _try_parse_json(decoder, attempt)
+            if parsed is not None:
+                return parsed
 
     raise LlmError("No valid JSON object found in LLM response")
 
@@ -95,6 +95,22 @@ def _strip_code_fence(text: str) -> str | None:
     if not match:
         return None
     return match.group(1).strip()
+
+
+def _try_parse_json(decoder: json.JSONDecoder, text: str) -> dict[str, Any] | None:
+    text = text.strip()
+    if not text:
+        return None
+    start = text.find("{")
+    if start == -1:
+        return None
+    try:
+        obj, _ = decoder.raw_decode(text[start:])
+        if isinstance(obj, dict):
+            return obj
+    except json.JSONDecodeError:
+        return None
+    return None
 
 
 def _extract_balanced_object(text: str) -> str | None:
@@ -131,6 +147,7 @@ def _extract_balanced_object(text: str) -> str | None:
 
 def _repair_json(text: str) -> str:
     text = text.replace("\r\n", "\n")
+    text = text.replace("\u201c", '"').replace("\u201d", '"').replace("\u2019", "'")
     text = re.sub(r",\s*([}\]])", r"\1", text)
     return _escape_newlines_in_strings(text)
 
