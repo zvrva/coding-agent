@@ -24,6 +24,11 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Configure git
+        run: |
+          git config --global user.email "sdlc-bot@users.noreply.github.com"
+          git config --global user.name "sdlc-bot"
+
       - name: Install agent
         run: |
           rm -rf build dist *.egg-info
