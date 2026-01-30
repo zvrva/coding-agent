@@ -353,6 +353,16 @@ def _has_tests(repo_path: Path) -> bool:
     return False
 
 
+def _parse_review_result(data: dict[str, Any]) -> ReviewResult:
+    verdict = str(data.get("verdict", "")).strip().lower()
+    if verdict not in {"approve", "changes_requested"}:
+        verdict = "changes_requested"
+    summary = str(data.get("summary", "")).strip()
+    blocking = [str(x) for x in data.get("blocking", [])]
+    notes = [str(x) for x in data.get("notes", [])]
+    return ReviewResult(verdict=verdict, summary=summary, blocking=blocking, notes=notes)
+
+
 def _format_review_comment(result: ReviewResult, quality_results, test_run: TestRun) -> str:
     not_run = "?? ???????????"
     lines = ["## SDLC Agent Review", f"**Verdict:** {result.verdict}", ""]
