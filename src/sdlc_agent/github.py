@@ -115,6 +115,9 @@ class GitHubClient:
             return pr
         return None
 
+    def get_current_user_login(self) -> str:
+        return self._gh.get_user().login
+
 
 def _parse_issue_url(url: str) -> tuple[str, int]:
     parts = url.strip("/").split("/")

@@ -65,6 +65,10 @@ def run_review_agent(settings: Settings, target_repo: str, pr_number: int) -> Re
 
     review_body = _format_review_comment(result)
     event = "APPROVE" if result.verdict == "approve" else "REQUEST_CHANGES"
+    if event == "REQUEST_CHANGES":
+        reviewer_login = gh.get_current_user_login()
+        if pr.user and reviewer_login and pr.user.login == reviewer_login:
+            event = "COMMENT"
     gh.post_review(target_repo, pr_number, review_body, event)
 
     if state_comment:
