@@ -25,8 +25,10 @@ jobs:
 
       - name: Install agent
         run: |
+          rm -rf build dist *.egg-info
+          python -m pip uninstall -y sdlc-agent || true
           python -m pip install --upgrade pip
-          python -m pip install .
+          python -m pip install --no-cache-dir .
 
       - name: Run code agent
         env:
