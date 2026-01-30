@@ -67,7 +67,7 @@ def extract_json(text: str) -> dict[str, Any]:
     end = text.rfind("}")
     if start == -1 or end == -1 or end <= start:
         raise LlmError("No JSON object found in LLM response")
-    return json.loads(text[start : end + 1])
+    return json.loads(text[start:end + 1])
 
 
 def _extract_content(data: dict[str, Any]) -> str:
