@@ -59,7 +59,6 @@ def run_code_agent(settings: Settings, agent_repo: str, issue_number: int) -> Co
     target_repo = _parse_target_repo(issue.body or "")
     if not target_repo:
         target_repo = agent_repo
-        gh.post_comment(agent_repo, issue_number, "Целевой репозиторий не указан, использую репозиторий Issue.")
 
     branch = f"sdlc/issue-{issue_number}"
     pr = gh.find_open_pr_by_branch(target_repo, branch)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import re
 import time
 from typing import Any
 
@@ -58,16 +59,28 @@ def chat(
 
 
 def extract_json(text: str) -> dict[str, Any]:
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        pass
+    text = text.strip()
+    if not text:
+        raise LlmError("Empty LLM response")
 
-    start = text.find("{")
-    end = text.rfind("}")
-    if start == -1 or end == -1 or end <= start:
-        raise LlmError("No JSON object found in LLM response")
-    return json.loads(text[start:end + 1])
+    candidates: list[str] = [text]
+    if "```" in text:
+        stripped = _strip_code_fence(text)
+        if stripped:
+            candidates.append(stripped)
+
+    balanced = _extract_balanced_object(text)
+    if balanced:
+        candidates.append(balanced)
+
+    for candidate in candidates:
+        for attempt in (candidate, _repair_json(candidate)):
+            try:
+                return json.loads(attempt)
+            except json.JSONDecodeError:
+                continue
+
+    raise LlmError("No valid JSON object found in LLM response")
 
 
 def _extract_content(data: dict[str, Any]) -> str:
@@ -75,3 +88,77 @@ def _extract_content(data: dict[str, Any]) -> str:
         return data["choices"][0]["message"]["content"]
     except Exception as exc:
         raise LlmError(f"Invalid LLM response schema: {exc}") from exc
+
+
+def _strip_code_fence(text: str) -> str | None:
+    match = re.search(r"```(?:json)?\s*(.*?)\s*```", text, flags=re.DOTALL | re.IGNORECASE)
+    if not match:
+        return None
+    return match.group(1).strip()
+
+
+def _extract_balanced_object(text: str) -> str | None:
+    depth = 0
+    in_string = False
+    escape = False
+    start = None
+    for i, ch in enumerate(text):
+        if in_string:
+            if escape:
+                escape = False
+                continue
+            if ch == "\\":
+                escape = True
+                continue
+            if ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+            continue
+        if ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}":
+            if depth == 0:
+                continue
+            depth -= 1
+            if depth == 0 and start is not None:
+                return text[start : i + 1]
+    return None
+
+
+def _repair_json(text: str) -> str:
+    text = text.replace("\r\n", "\n")
+    text = re.sub(r",\s*([}\]])", r"\1", text)
+    return _escape_newlines_in_strings(text)
+
+
+def _escape_newlines_in_strings(text: str) -> str:
+    out: list[str] = []
+    in_string = False
+    escape = False
+    for ch in text:
+        if in_string:
+            if escape:
+                escape = False
+                out.append(ch)
+                continue
+            if ch == "\\":
+                escape = True
+                out.append(ch)
+                continue
+            if ch == '"':
+                in_string = False
+                out.append(ch)
+                continue
+            if ch == "\n":
+                out.append("\\n")
+                continue
+            out.append(ch)
+        else:
+            if ch == '"':
+                in_string = True
+            out.append(ch)
+    return "".join(out)
