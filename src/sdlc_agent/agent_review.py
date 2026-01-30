@@ -257,6 +257,42 @@ def _apply_generated_tests(repo_path: Path, data: dict[str, Any]) -> list[str]:
     return changed
 
 
+def _build_review_context(
+    issue_text: str,
+    diff: str,
+    files: list[dict[str, Any]],
+    quality_results,
+    test_run: TestRun,
+) -> str:
+    parts = ["ISSUE:", issue_text.strip(), "", "DIFF:", diff[:10000], "", "FILES:"]
+    for f in files:
+        parts.append(f"- {f.get("filename")} ({f.get("status")} +{f.get("additions")}/-{f.get("deletions")})")
+    parts.append("")
+    parts.append("QUALITY:")
+    if quality_results:
+        for res in quality_results:
+            parts.append(_format_command(res))
+    else:
+        parts.append("No quality tools detected.")
+    parts.append("")
+    parts.append("TESTS:")
+    if test_run.result is not None:
+        parts.append(_format_command(test_run.result))
+    else:
+        parts.append(test_run.note or "Tests not run.")
+    if test_run.generated_files:
+        parts.append("")
+        parts.append("GENERATED_TESTS:")
+        for name in test_run.generated_files:
+            parts.append(f"- {name}")
+    return "\n".join(parts)
+
+def _build_test_context(issue_text: str, diff: str, files: list[dict[str, Any]], repo_path: Path) -> str:
+    parts = ["ISSUE:", issue_text.strip(), "", "DIFF:", diff[:8000], "", "FILES:"]
+    for f in files:
+        parts.append(f"- {f.get("filename")}")
+    return "\n".join(parts)
+
 def _build_pytest_fallback_cmd(repo_path: Path) -> str:
     repo_str = str(repo_path)
     src_str = str(repo_path / "src")
