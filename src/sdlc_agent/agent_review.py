@@ -89,11 +89,7 @@ def run_review_agent(settings: Settings, target_repo: str, pr_number: int) -> Re
             quality_results = run_quality_checks(repo_path, timeout_sec=settings.test_timeout_sec)
             test_run = _run_or_generate_tests(repo_path, issue_text, diff, files, settings)
         else:
-            test_run = TestRun(
-                result=None,
-                note="\u041d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d\u044b \u0437\u0430\u0432\u0438\u0441\u0438\u043c\u043e\u0441\u0442\u0438 \u0438\u043b\u0438 \u0438\u043d\u0441\u0442\u0440\u0443\u043a\u0446\u0438\u0438 \u0434\u043b\u044f \u0442\u0435\u0441\u0442\u043e\u0432.",
-                generated_files=[],
-            )
+            test_run = _run_or_generate_tests(repo_path, issue_text, diff, files, settings)
 
     context = _build_review_context(issue_text, diff, files, quality_results, test_run)
     messages = [
@@ -256,6 +252,30 @@ def _apply_generated_tests(repo_path: Path, data: dict[str, Any]) -> list[str]:
     return changed
 
 
+def _build_pytest_fallback_cmd(repo_path: Path) -> str:
+    repo_str = str(repo_path)
+    src_str = str(repo_path / "src")
+    code = (
+        f"import sys; sys.path.insert(0, '{repo_str}'); "
+        f"sys.path.insert(0, '{src_str}'); "
+        "import pytest; "
+        "raise SystemExit(pytest.main(['-q']))"
+    )
+    return f"python -c \"{code}\""
+
+
+def _needs_pytest_install(res) -> bool:
+    text = (res.stdout + "\n" + res.stderr).lower()
+    return "no module named pytest" in text or "pytest: not found" in text
+
+def _build_test_commands(default_cmd: str, fallback_cmd: str) -> list[str]:
+    cmds = []
+    for cmd in [default_cmd, "python -m pytest -q", "pytest -q", fallback_cmd]:
+        if cmd and cmd not in cmds:
+            cmds.append(cmd)
+    return cmds
+
+
 def _run_tests(repo_path: Path, settings: Settings):
     pythonpath_parts = [str(repo_path)]
     src_dir = repo_path / "src"
@@ -266,107 +286,21 @@ def _run_tests(repo_path: Path, settings: Settings):
         pythonpath_parts.append(existing_pp)
     pythonpath_value = os.pathsep.join(pythonpath_parts)
     test_env = {"PYTHONPATH": pythonpath_value}
-    test_cmd = settings.default_test_cmd
-    if os.name != "nt":
-        test_cmd = f"PYTHONPATH={pythonpath_value} {settings.default_test_cmd}"
-    return run_cmd(test_cmd, cwd=repo_path, timeout_sec=settings.test_timeout_sec, extra_env=test_env)
 
+    fallback_cmd = _build_pytest_fallback_cmd(repo_path)
+    commands = _build_test_commands(settings.default_test_cmd, fallback_cmd)
 
-def _has_tests(repo_path: Path) -> bool:
-    if (repo_path / "tests").exists():
-        return True
-    for p in repo_path.rglob("test_*.py"):
-        if p.is_file():
-            return True
-    return False
-
-
-def _build_review_context(
-    issue_text: str,
-    diff: str,
-    files: list[dict[str, Any]],
-    quality_results,
-    test_run: TestRun,
-) -> str:
-    parts = ["ISSUE:", issue_text.strip(), "", "DIFF:", diff[:10000], "", "FILES:"]
-    for f in files:
-        parts.append(
-            f"- {f.get('filename')} ({f.get('status')} +{f.get('additions')}/-{f.get('deletions')})"
-        )
-
-    parts.append("")
-    parts.append("QUALITY:")
-    if quality_results:
-        for res in quality_results:
-            parts.append(_format_command(res))
-    else:
-        parts.append("No quality tools detected.")
-
-    parts.append("")
-    parts.append("TESTS:")
-    if test_run.result is not None:
-        parts.append(_format_command(test_run.result))
-    else:
-        parts.append(test_run.note or "Tests not run.")
-
-    if test_run.generated_files:
-        parts.append("")
-        parts.append("GENERATED_TESTS:")
-        for name in test_run.generated_files:
-            parts.append(f"- {name}")
-
-    return "\n".join(parts)
-
-
-def _build_test_context(issue_text: str, diff: str, files: list[dict[str, Any]], repo_path: Path) -> str:
-    parts = ["ISSUE:", issue_text.strip(), "", "DIFF:", diff[:8000], "", "FILES:"]
-    for f in files:
-        parts.append(f"- {f.get('filename')}")
-    return "\n".join(parts)
-
-
-def _parse_review_result(data: dict[str, Any]) -> ReviewResult:
-    verdict = str(data.get("verdict", "")).strip().lower()
-    if verdict not in {"approve", "changes_requested"}:
-        verdict = "changes_requested"
-    summary = str(data.get("summary", "")).strip()
-    blocking = [str(x) for x in data.get("blocking", [])]
-    notes = [str(x) for x in data.get("notes", [])]
-    return ReviewResult(verdict=verdict, summary=summary, blocking=blocking, notes=notes)
-
-
-def _format_review_comment(result: ReviewResult, quality_results, test_run: TestRun) -> str:
-    lines = ["## SDLC Agent Review", f"**Verdict:** {result.verdict}", ""]
-    if result.summary:
-        lines.append(f"**Summary:** {result.summary}")
-        lines.append("")
-    if result.blocking:
-        lines.append("### Blocking issues")
-        for item in result.blocking:
-            lines.append(f"- {item}")
-        lines.append("")
-    if result.notes:
-        lines.append("### Notes")
-        for item in result.notes:
-            lines.append(f"- {item}")
-        lines.append("")
-
-    lines.append("### Checks")
-    if quality_results:
-        for res in quality_results:
-            lines.append(_format_command(res))
-    else:
-        lines.append("- Quality checks: not detected")
-
-    if test_run.result is not None:
-        lines.append(_format_command(test_run.result))
-    else:
-        lines.append(f"- Tests: {test_run.note or 'not run'}")
-
-    if test_run.generated_files:
-        lines.append("- Generated tests: " + ", ".join(test_run.generated_files))
-
-    return "\n".join(lines)
+    last = None
+    installed_pytest = False
+    for cmd in commands:
+        res = run_cmd(cmd, cwd=repo_path, timeout_sec=settings.test_timeout_sec, extra_env=test_env)
+        last = res
+        if res.returncode == 0:
+            return res
+        if not installed_pytest and _needs_pytest_install(res):
+            run_cmd("python -m pip install pytest", cwd=repo_path, timeout_sec=settings.pip_timeout_sec)
+            installed_pytest = True
+    return last
 
 
 def _format_command(res) -> str:
