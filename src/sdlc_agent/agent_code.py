@@ -98,7 +98,7 @@ def run_code_agent(settings: Settings, agent_repo: str, issue_number: int) -> Co
         _apply_file_changes(repo_path, data)
 
         if not _has_changes(repo_path):
-            message = "????????? ?? ??????? ????? ?????????? ??????. PR ?? ??????."
+            message = "No changes after applying patch. PR not created."
             gh.post_comment(agent_repo, issue_number, message)
             if pr:
                 gh.post_comment(target_repo, pr.number, message)
@@ -419,7 +419,7 @@ def _format_run_report_skipped() -> str:
     return "\n".join([
         "## SDLC Agent run report",
         "### Quality checks",
-        "????????? ? code-agent.",
+        "Skipped in code-agent.",
         "### Tests",
-        "????????? ? code-agent. ????????? ? review.",
+        "Skipped in code-agent. Run in review.",
     ])
