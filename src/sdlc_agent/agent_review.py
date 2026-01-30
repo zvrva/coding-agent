@@ -266,7 +266,7 @@ def _build_review_context(
 ) -> str:
     parts = ["ISSUE:", issue_text.strip(), "", "DIFF:", diff[:10000], "", "FILES:"]
     for f in files:
-        parts.append(f"- {f.get("filename")} ({f.get("status")} +{f.get("additions")}/-{f.get("deletions")})")
+        parts.append(f'- {f.get("filename")} ({f.get("status")} +{f.get("additions")}/-{f.get("deletions")})')
     parts.append("")
     parts.append("QUALITY:")
     if quality_results:
