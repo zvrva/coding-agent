@@ -95,7 +95,14 @@ def run_code_agent(settings: Settings, agent_repo: str, issue_number: int) -> Co
         )
         data = extract_json(llm_resp.content)
         summary = str(data.get("summary", ""))
-        _apply_file_changes(repo_path, data)
+        changed_files = _apply_file_changes(repo_path, data)
+
+        if not changed_files:
+            message = "No files changed by LLM. PR not created."
+            gh.post_comment(agent_repo, issue_number, message)
+            if pr:
+                gh.post_comment(target_repo, pr.number, message)
+            return CodeResult(pr_number=pr.number if pr else None, branch=branch, iteration=iteration, summary="no-files")
 
         if not _has_changes(repo_path):
             message = "No changes after applying patch. PR not created."
@@ -104,7 +111,14 @@ def run_code_agent(settings: Settings, agent_repo: str, issue_number: int) -> Co
                 gh.post_comment(target_repo, pr.number, message)
             return CodeResult(pr_number=pr.number if pr else None, branch=branch, iteration=iteration, summary="no-changes")
 
-        _commit_all(repo_path, branch, iteration, summary)
+        commit_res = _commit_all(repo_path, branch, iteration, summary)
+        if commit_res.returncode != 0:
+            message = "Commit failed or no changes to commit. PR not created."
+            gh.post_comment(agent_repo, issue_number, message + "\n" + commit_res.stderr.strip())
+            if pr:
+                gh.post_comment(target_repo, pr.number, message)
+            return CodeResult(pr_number=pr.number if pr else None, branch=branch, iteration=iteration, summary="no-commit")
+
         _push(repo_path)
 
         pr_body = _build_pr_body(issue, summary)
@@ -321,10 +335,10 @@ def _apply_file_changes(repo_path: Path, data: dict) -> list[str]:
     return changed
 
 
-def _commit_all(repo_path: Path, branch: str, iteration: int, summary: str) -> None:
+def _commit_all(repo_path: Path, branch: str, iteration: int, summary: str):
     run_cmd("git add .", cwd=repo_path)
     msg = f"SDLC(iter={iteration}): {summary or 'apply changes'}"
-    run_cmd(f"git commit -m \"{msg}\"", cwd=repo_path)
+    return run_cmd(f"git commit -m \"{msg}\"", cwd=repo_path)
 
 
 def _push(repo_path: Path) -> None:
