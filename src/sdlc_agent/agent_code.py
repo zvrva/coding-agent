@@ -117,6 +117,12 @@ def run_code_agent(settings: Settings, agent_repo: str, issue_number: int) -> Co
         test_cmd = settings.default_test_cmd
         if os.name != "nt":
             test_cmd = f"PYTHONPATH={pythonpath_value} {settings.default_test_cmd}"
+        use_fallback = False
+        if not (repo_path / "pyproject.toml").exists():
+            if src_dir.exists() or (repo_path / "python_utils_demo").exists():
+                use_fallback = True
+        if use_fallback:
+            test_cmd = _build_pytest_fallback_cmd(repo_path)
         test_result = run_cmd(test_cmd, cwd=repo_path, timeout_sec=settings.test_timeout_sec, extra_env=test_env)
         output_text = (test_result.stdout or "") + "\n" + (test_result.stderr or "")
         if test_result.returncode != 0 and "ModuleNotFoundError" in output_text and "python_utils_demo" in output_text:
