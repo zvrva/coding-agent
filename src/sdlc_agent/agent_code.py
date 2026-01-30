@@ -145,6 +145,11 @@ def run_code_agent(settings: Settings, agent_repo: str, issue_number: int) -> Co
             body=pr_body,
         )
 
+        try:
+            gh.dispatch_event(agent_repo, "review_pr", {"repo": target_repo, "pr": pr.number})
+        except Exception as exc:
+            gh.post_comment(agent_repo, issue_number, f"?? ??????? ????????? review: {exc}")
+
         state = next_iteration(state, verdict="pending_review")
         gh.upsert_state_comment(target_repo, pr.number, render_state(state))
         gh.set_attempt_label(target_repo, pr.number, iteration, state.max_iterations)
