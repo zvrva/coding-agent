@@ -41,9 +41,9 @@ class GitHubClient:
         repo = self.get_repo(repo_full)
         issue = repo.get_issue(pr_number)
         labels = list(issue.get_labels())
-        pattern = r"^(attempt|???????) \d+/\d+$"
         for lbl in labels:
-            if re.match(pattern, lbl.name, flags=re.IGNORECASE):
+            name = (lbl.name or "").strip().lower()
+            if name.startswith("??????? ") or name.startswith("attempt "):
                 issue.remove_from_labels(lbl)
         label_name = f"??????? {iteration}/{max_iterations}"
         try:
