@@ -162,6 +162,11 @@ def run_review_agent(settings: Settings, target_repo: str, pr_number: int) -> Re
             )
             gh.upsert_state_comment(target_repo, pr_number, render_state(updated))
 
+    if st and st.source_issue_url:
+        issue = gh.get_issue_by_url(st.source_issue_url)
+        attempt_comment = _format_attempt_comment(pr.html_url, st.iteration, st.max_iterations, result, quality_results, test_run)
+        gh.post_comment(issue.repository.full_name, issue.number, attempt_comment)
+
     if result.verdict == "changes_requested" and st and st.iteration < st.max_iterations and agent_issue_number:
         dispatch_repo = os.getenv("AGENT_REPO") or agent_issue_repo
         if dispatch_repo:
@@ -301,6 +306,71 @@ def _run_tests(repo_path: Path, settings: Settings):
             run_cmd("python -m pip install pytest", cwd=repo_path, timeout_sec=settings.pip_timeout_sec)
             installed_pytest = True
     return last
+
+
+def _format_review_comment(result: ReviewResult, quality_results, test_run: TestRun) -> str:
+    lines = ["## SDLC Agent Review", f"**Verdict:** {result.verdict}", ""]
+    if result.summary:
+        lines.append(f"**Summary:** {result.summary}")
+        lines.append("")
+    if result.blocking:
+        lines.append("### Blocking issues")
+        for item in result.blocking:
+            lines.append(f"- {item}")
+        lines.append("")
+    if result.notes:
+        lines.append("### Notes")
+        for item in result.notes:
+            lines.append(f"- {item}")
+        lines.append("")
+
+    lines.append("### Checks")
+    if quality_results:
+        for res in quality_results:
+            lines.append(_format_command(res))
+    else:
+        lines.append("- Quality checks: not detected")
+
+    if test_run.result is not None:
+        lines.append(_format_command(test_run.result))
+    else:
+        lines.append(f"- Tests: {test_run.note or 'not run'}")
+
+    if test_run.generated_files:
+        lines.append("- Generated tests: " + ", ".join(test_run.generated_files))
+
+    return "\n".join(lines)
+
+
+def _format_attempt_comment(pr_url: str, attempt: int, max_attempts: int, result: ReviewResult, quality_results, test_run: TestRun) -> str:
+    lines = [
+        f"Attempt {attempt}/{max_attempts}",
+        f"PR: {pr_url}",
+        f"Verdict: {result.verdict}",
+    ]
+    if result.summary:
+        lines.append(f"Summary: {result.summary}")
+    if result.blocking:
+        lines.append("Blocking:")
+        for item in result.blocking:
+            lines.append(f"- {item}")
+    if result.notes:
+        lines.append("Notes:")
+        for item in result.notes:
+            lines.append(f"- {item}")
+    lines.append("Checks:")
+    if quality_results:
+        for res in quality_results:
+            lines.append(_format_command(res))
+    else:
+        lines.append("- Quality: not detected")
+    if test_run.result is not None:
+        lines.append(_format_command(test_run.result))
+    else:
+        lines.append(f"- Tests: {test_run.note or 'not run'}")
+    if test_run.generated_files:
+        lines.append("- Generated tests: " + ", ".join(test_run.generated_files))
+    return "\n".join(lines)
 
 
 def _format_command(res) -> str:
