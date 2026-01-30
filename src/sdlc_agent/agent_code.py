@@ -10,7 +10,7 @@ from typing import Iterable
 from .config import Settings
 from .github import GitHubClient
 from .llm import chat, extract_json
-from .runner import detect_install_cmd, run_cmd, run_quality_checks
+from .runner import detect_install_cmd, run_cmd
 from .state import State, can_iterate, new_state, next_iteration, parse_state, render_state
 
 
@@ -76,15 +76,8 @@ def run_code_agent(settings: Settings, agent_repo: str, issue_number: int) -> Co
         _checkout_branch(repo_path, branch)
 
         install_cmds = detect_install_cmd(repo_path)
-        if not install_cmds:
-            gh.post_comment(
-                agent_repo,
-                issue_number,
-                "Не найдены инструкции по установке зависимостей (pyproject/requirements*).",
-            )
-            return CodeResult(pr_number=pr.number if pr else None, branch=branch, iteration=iteration, summary="no-install")
-
-        _install_dependencies(repo_path, install_cmds, settings.pip_timeout_sec)
+        if install_cmds:
+            _install_dependencies(repo_path, install_cmds, settings.pip_timeout_sec)
 
         context = _build_context(repo_path, issue.body or "")
         messages = [
@@ -103,55 +96,6 @@ def run_code_agent(settings: Settings, agent_repo: str, issue_number: int) -> Co
         data = extract_json(llm_resp.content)
         summary = str(data.get("summary", ""))
         _apply_file_changes(repo_path, data)
-
-        quality_results = run_quality_checks(repo_path, timeout_sec=settings.test_timeout_sec)
-        pythonpath_parts = [str(repo_path)]
-        src_dir = repo_path / "src"
-        if src_dir.exists():
-            pythonpath_parts.append(str(src_dir))
-        existing_pp = os.environ.get("PYTHONPATH")
-        if existing_pp:
-            pythonpath_parts.append(existing_pp)
-        pythonpath_value = os.pathsep.join(pythonpath_parts)
-        test_env = {"PYTHONPATH": pythonpath_value}
-        test_cmd = settings.default_test_cmd
-        if os.name != "nt":
-            test_cmd = f"PYTHONPATH={pythonpath_value} {settings.default_test_cmd}"
-        use_fallback = False
-        if not (repo_path / "pyproject.toml").exists():
-            if src_dir.exists() or (repo_path / "python_utils_demo").exists():
-                use_fallback = True
-        if use_fallback:
-            test_cmd = _build_pytest_fallback_cmd(repo_path)
-        test_result = run_cmd(test_cmd, cwd=repo_path, timeout_sec=settings.test_timeout_sec, extra_env=test_env)
-        output_text = (test_result.stdout or "") + "\n" + (test_result.stderr or "")
-        if test_result.returncode != 0 and "ModuleNotFoundError" in output_text and "python_utils_demo" in output_text:
-            fallback_cmd = _build_pytest_fallback_cmd(repo_path)
-            test_cmd = fallback_cmd
-            test_result = run_cmd(test_cmd, cwd=repo_path, timeout_sec=settings.test_timeout_sec, extra_env=test_env)
-
-        if test_result.returncode != 0:
-            fix_context = _build_fix_context(repo_path, issue.body or "", test_result.stdout + "\n" + test_result.stderr)
-            fix_messages = [
-                {"role": "system", "content": PROMPT_CODE_FIX},
-                {"role": "user", "content": fix_context},
-            ]
-            fix_resp = chat(
-                settings.codestral_api_base,
-                settings.codestral_api_key,
-                settings.codestral_model,
-                fix_messages,
-                temperature=0.2,
-                max_tokens=2048,
-                timeout_sec=60,
-            )
-            fix_data = extract_json(fix_resp.content)
-            fix_summary = str(fix_data.get("summary", ""))
-            _apply_file_changes(repo_path, fix_data)
-            quality_results = run_quality_checks(repo_path, timeout_sec=settings.test_timeout_sec)
-            test_result = run_cmd(test_cmd, cwd=repo_path, timeout_sec=settings.test_timeout_sec, extra_env=test_env)
-            if fix_summary:
-                summary = fix_summary
 
         if not _has_changes(repo_path):
             message = "????????? ?? ??????? ????? ?????????? ??????. PR ?? ??????."
@@ -173,7 +117,7 @@ def run_code_agent(settings: Settings, agent_repo: str, issue_number: int) -> Co
 
         state = next_iteration(state, verdict="pending_review")
         gh.upsert_state_comment(target_repo, pr.number, render_state(state))
-        gh.post_comment(target_repo, pr.number, _format_run_report(quality_results, test_result))
+        gh.post_comment(target_repo, pr.number, _format_run_report_skipped())
 
         return CodeResult(pr_number=pr.number, branch=branch, iteration=iteration, summary=summary)
 
@@ -469,3 +413,13 @@ def _get_default_branch(repo_path: Path) -> str:
 def _has_changes(repo_path: Path) -> bool:
     res = run_cmd("git status --porcelain", cwd=repo_path)
     return bool((res.stdout or "").strip())
+
+
+def _format_run_report_skipped() -> str:
+    return "\n".join([
+        "## SDLC Agent run report",
+        "### Quality checks",
+        "????????? ? code-agent.",
+        "### Tests",
+        "????????? ? code-agent. ????????? ? review.",
+    ])
