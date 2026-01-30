@@ -431,8 +431,5 @@ def _has_changes(repo_path: Path) -> bool:
 def _format_run_report_skipped() -> str:
     return "\n".join([
         "## SDLC Agent run report",
-        "### Quality checks",
-        "Skipped in code-agent.",
-        "### Tests",
-        "Skipped in code-agent. Run in review.",
+        "Изменения подготовлены. Проверки выполнит review-agent.",
     ])
