@@ -308,7 +308,17 @@ def _run_tests(repo_path: Path, settings: Settings):
     return last
 
 
+def _has_tests(repo_path: Path) -> bool:
+    if (repo_path / "tests").exists():
+        return True
+    for p in repo_path.rglob("test_*.py"):
+        if p.is_file():
+            return True
+    return False
+
+
 def _format_review_comment(result: ReviewResult, quality_results, test_run: TestRun) -> str:
+    not_run = "?? ???????????"
     lines = ["## SDLC Agent Review", f"**Verdict:** {result.verdict}", ""]
     if result.summary:
         lines.append(f"**Summary:** {result.summary}")
@@ -323,55 +333,50 @@ def _format_review_comment(result: ReviewResult, quality_results, test_run: Test
         for item in result.notes:
             lines.append(f"- {item}")
         lines.append("")
-
     lines.append("### Checks")
     if quality_results:
         for res in quality_results:
             lines.append(_format_command(res))
     else:
         lines.append("- Quality checks: not detected")
-
     if test_run.result is not None:
         lines.append(_format_command(test_run.result))
     else:
-        lines.append(f"- Tests: {test_run.note or 'not run'}")
-
+        lines.append(f"- ?????: {test_run.note or not_run}")
     if test_run.generated_files:
-        lines.append("- Generated tests: " + ", ".join(test_run.generated_files))
-
+        lines.append("- ??????????????? ?????: " + ", ".join(test_run.generated_files))
     return "\n".join(lines)
 
-
 def _format_attempt_comment(pr_url: str, attempt: int, max_attempts: int, result: ReviewResult, quality_results, test_run: TestRun) -> str:
+    not_run = "?? ???????????"
     lines = [
-        f"Attempt {attempt}/{max_attempts}",
+        f"??????? {attempt}/{max_attempts}",
         f"PR: {pr_url}",
-        f"Verdict: {result.verdict}",
+        f"???????: {result.verdict}",
     ]
     if result.summary:
-        lines.append(f"Summary: {result.summary}")
+        lines.append(f"????: {result.summary}")
     if result.blocking:
-        lines.append("Blocking:")
+        lines.append("???????:")
         for item in result.blocking:
             lines.append(f"- {item}")
     if result.notes:
-        lines.append("Notes:")
+        lines.append("???????:")
         for item in result.notes:
             lines.append(f"- {item}")
-    lines.append("Checks:")
+    lines.append("????????:")
     if quality_results:
         for res in quality_results:
             lines.append(_format_command(res))
     else:
-        lines.append("- Quality: not detected")
+        lines.append("- ????????: ?? ???????")
     if test_run.result is not None:
         lines.append(_format_command(test_run.result))
     else:
-        lines.append(f"- Tests: {test_run.note or 'not run'}")
+        lines.append(f"- ?????: {test_run.note or not_run}")
     if test_run.generated_files:
-        lines.append("- Generated tests: " + ", ".join(test_run.generated_files))
+        lines.append("- ??????????????? ?????: " + ", ".join(test_run.generated_files))
     return "\n".join(lines)
-
 
 def _format_command(res) -> str:
     status = "OK" if res.returncode == 0 else f"FAIL ({res.returncode})"
