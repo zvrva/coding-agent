@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import os
+import re
 from typing import Any
 
 import requests
 from github import Github
-import re
+
 
 from .state import STATE_MARKER
 
