@@ -70,6 +70,20 @@ def run_code_agent(settings: Settings, agent_repo: str, issue_number: int) -> Co
     state = next_iteration(state, verdict="in_progress")
     iteration = state.iteration
 
+    def schedule_retry(reason: str) -> None:
+        if iteration >= state.max_iterations:
+            return
+        payload = {
+            "repo": target_repo,
+            "issue_number": issue_number,
+            "reason": reason,
+        }
+        try:
+            gh.dispatch_event(agent_repo, "issue_opened", payload)
+        except Exception as exc:
+            gh.post_comment(agent_repo, issue_number, f"?? ??????? ????????????? ??????: {exc}")
+
+
     with tempfile.TemporaryDirectory(prefix="sdlc-agent-") as tmp:
         repo_path = _clone_repo(target_repo, settings.github_token, tmp)
         _checkout_branch(repo_path, branch)
@@ -101,6 +115,7 @@ def run_code_agent(settings: Settings, agent_repo: str, issue_number: int) -> Co
             gh.post_comment(agent_repo, issue_number, message)
             if pr:
                 gh.post_comment(target_repo, pr.number, message)
+            schedule_retry("no-files")
             return CodeResult(pr_number=pr.number if pr else None, branch=branch, iteration=iteration, summary="no-files")
 
         if not _has_changes(repo_path):
@@ -108,6 +123,7 @@ def run_code_agent(settings: Settings, agent_repo: str, issue_number: int) -> Co
             gh.post_comment(agent_repo, issue_number, message)
             if pr:
                 gh.post_comment(target_repo, pr.number, message)
+            schedule_retry("no-changes")
             return CodeResult(pr_number=pr.number if pr else None, branch=branch, iteration=iteration, summary="no-changes")
 
         commit_res = _commit_all(repo_path, branch, iteration, summary)
@@ -116,6 +132,7 @@ def run_code_agent(settings: Settings, agent_repo: str, issue_number: int) -> Co
             gh.post_comment(agent_repo, issue_number, message + "\n" + commit_res.stderr.strip())
             if pr:
                 gh.post_comment(target_repo, pr.number, message)
+            schedule_retry("no-commit")
             return CodeResult(pr_number=pr.number if pr else None, branch=branch, iteration=iteration, summary="no-commit")
 
         _push(repo_path)
